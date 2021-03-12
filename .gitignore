@@ -1,0 +1,5 @@
+.vs/
+out/
+CMakeSettings.json
+config.json
+Folder.DotSettings.user

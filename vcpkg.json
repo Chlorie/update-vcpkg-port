@@ -1,0 +1,10 @@
+{
+    "name": "update-vcpkg-port",
+    "version-string": "0.1.0",
+    "dependencies": [
+        "argh",
+        "boost-process",
+        "fmt",
+        "nlohmann-json"
+    ]
+}
