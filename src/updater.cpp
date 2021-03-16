@@ -7,6 +7,18 @@ namespace uvp
 {
     namespace nl = nlohmann;
 
+    void Updater::print_config() const
+    {
+        info("Config:");
+        fmt::print(
+            "    Port name:         {}\n"
+            "    Ports path:        {}\n"
+            "    Local repo path:   {}\n"
+            "    Push to remote:    {}\n",
+            config_.name, config_.ports_path.string(),
+            config_.local_repo ? "none" : config_.local_repo->string(), config_.push);
+    }
+
     void Updater::get_portfile()
     {
         info("Parsing portfile.cmake...");
@@ -169,20 +181,37 @@ namespace uvp
         run_command("git push");
     }
 
+    void Updater::clean_up_install_test() const
+    {
+        if (const auto test_path = config_.ports_path / "temp/install-test";
+            exists(test_path))
+            remove_all(test_path);
+    }
+
     void Updater::run()
     {
+        print_config();
         get_portfile();
         clone_or_pull_remote_repo();
         get_manifest();
         update_versions();
         setup_test();
-        while (true)
+        try
         {
-            const std::string hash = test_install();
-            if (hash.empty()) break;
-            update_sha512(hash);
+            while (true)
+            {
+                const std::string hash = test_install();
+                if (hash.empty()) break;
+                update_sha512(hash);
+            }
+            push_remote();
+            info("Port {} updated successfully!", config_.name);
         }
-        push_remote();
-        info("Port {} updated successfully!", config_.name);
+        catch (...)
+        {
+            clean_up_install_test();
+            throw;
+        }
+        clean_up_install_test();
     }
 }

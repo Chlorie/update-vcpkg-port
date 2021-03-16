@@ -14,6 +14,7 @@ namespace uvp
         Manifest manifest_;
         fs::path version_file_;
 
+        void print_config() const;
         void get_portfile();
         void clone_or_pull_remote_repo();
         void get_manifest();
@@ -22,6 +23,7 @@ namespace uvp
         std::string test_install() const;
         void update_sha512(std::string_view hash);
         void push_remote() const;
+        void clean_up_install_test() const;
 
     public:
         explicit Updater(Config config): config_(std::move(config)) {}
