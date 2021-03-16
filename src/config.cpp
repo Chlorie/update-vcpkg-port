@@ -18,6 +18,8 @@ name:           name of the port to update
 -l --local:     use this local path of the port's library for updating the port (optional)
                 this path is relative to the -p path if specified
 -a --auto:      automatically push the ports repo to remote without confirmation 
+-f --fix:       try to fix former failed port update
+                continue amending latest commit instead of starting a new commit
 )");
             std::exit(1);
         }
@@ -38,6 +40,7 @@ name:           name of the port to update
             config.local_repo = canonical(config.ports_path / local_repo);
 
         config.push = cmd[{ "-a", "--auto" }];
+        config.fix = cmd[{ "-f", "--fix" }];
 
         return config;
     }

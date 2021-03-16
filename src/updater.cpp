@@ -14,9 +14,11 @@ namespace uvp
             "    Port name:         {}\n"
             "    Ports path:        {}\n"
             "    Local repo path:   {}\n"
-            "    Push to remote:    {}\n",
+            "    Push to remote:    {}\n"
+            "    Fix failed update: {}\n",
             config_.name, config_.ports_path.string(),
-            config_.local_repo ? "none" : config_.local_repo->string(), config_.push);
+            config_.local_repo ? config_.local_repo->string() : "none",
+            config_.push, config_.fix);
     }
 
     void Updater::get_portfile()
@@ -57,14 +59,25 @@ namespace uvp
             manifest_.version_type(), manifest_.version(), manifest_.port_version());
     }
 
+    void Updater::get_vcpkg_config()
+    {
+        info("Finding vcpkg config file (vcpkg-configuration.json)...");
+        if (const fs::path result = *config_.local_repo / "vcpkg-configuration.json";
+            exists(result))
+        {
+            vcpkg_config_ = read_all_text(result);
+            fmt::print("Found vcpkg config\n");
+        }
+        else
+            fmt::print("No vcpkg config found\n");
+    }
+
     void Updater::update_versions()
     {
-        // Copy manifest
         {
             info("Copying manifest file...");
             manifest_.copy_to(config_.ports_path / "ports" / config_.name / "vcpkg.json");
         }
-        // Update portfile (later this is updated again modifying the SHA512)
         {
             info("Updating portfile REF...");
             current_path(*config_.local_repo);
@@ -72,7 +85,6 @@ namespace uvp
             portfile_.set_ref(obj);
             portfile_.save();
         }
-        // Update baseline
         {
             info("Updating baseline...");
             const auto path = config_.ports_path / "versions/baseline.json";
@@ -83,14 +95,20 @@ namespace uvp
             };
             write_all_text(path, json.dump(4));
         }
-        // Commit changes
         {
             info("Commit changes...");
             current_path(config_.ports_path);
             run_command("git add -A");
-            run_command(fmt::format(R"(git commit -m "Update {} to {}")", config_.name, manifest_.version()));
+            if (config_.fix)
+                run_command("git commit --amend --no-edit");
+            else
+            {
+                const std::string version = manifest_.port_version() == 0 ?
+                                                std::string(manifest_.version()) :
+                                                fmt::format("{} (port version {})", manifest_.port_version());
+                run_command(fmt::format(R"(git commit -m "Update {} to {}")", config_.name, version));
+            }
         }
-        // Update git-tree
         {
             info("Updating version file...");
             const auto obj = run_command(fmt::format("git rev-parse HEAD:ports/{}", config_.name)).output[0];
@@ -98,11 +116,24 @@ namespace uvp
             version_file_ = canonical(config_.ports_path / "versions" / initial / (config_.name + ".json"));
             auto json = nl::json::parse(read_all_text(version_file_));
             auto& versions = json["versions"];
-            versions.insert(versions.begin(), nl::json{
-                { manifest_.version_type(), manifest_.version() },
-                { "port-version", manifest_.port_version() },
-                { "git-tree", obj }
-            });
+            if (const bool fix_front_version = [&]
+            {
+                if (versions.empty()) return false;
+                const auto& front = versions.front();
+                if (const auto iter = front.find(manifest_.version_type());
+                    iter == front.end() || iter.value().get_ref<const std::string&>() != manifest_.version())
+                    return false;
+                const auto iter = front.find("port-version");
+                if (iter == front.end()) return manifest_.port_version() == 0;
+                return iter.value().get<int>() == manifest_.port_version();
+            }(); fix_front_version)
+                versions.front()["git-tree"] = obj;
+            else
+                versions.insert(versions.begin(), nl::json{
+                    { manifest_.version_type(), manifest_.version() },
+                    { "port-version", manifest_.port_version() },
+                    { "git-tree", obj }
+                });
             write_all_text(version_file_, json.dump(4));
             run_command("git add -A");
             run_command("git commit --amend --no-edit");
@@ -114,26 +145,35 @@ namespace uvp
         info("Setting up installation test...");
         const auto test_path = config_.ports_path / "temp/install-test";
         if (!exists(test_path)) create_directories(test_path);
-        write_all_text(test_path / "vcpkg.json", fmt::format(
-            R"({{
-    "name": "vcpkg-ports-test",
-    "version-string": "0.0.1",
-    "dependencies": [ "{}" ]
-}}
-)",
-            config_.name));
-        write_all_text(test_path / "vcpkg-configuration.json", fmt::format(
-            R"({{
-    "registries": [
-        {{
-            "kind": "git",
-            "repository": "file:///{}",
-            "packages": [ "{}" ]
-        }}
-    ]
-}}
-)",
-            config_.ports_path.generic_string(), config_.name));
+        write_all_text(test_path / "vcpkg.json", nl::json{
+            { "name", "vcpkg-ports-test" },
+            { "version-string", "0.0.1" },
+            { "dependencies", { config_.name } }
+        }.dump(4));
+
+        nl::json vcpkg_config{
+            {
+                "registries", {
+                    {
+                        { "kind", "git" },
+                        { "repository", "file:///" + config_.ports_path.generic_string() },
+                        { "packages", { config_.name } }
+                    }
+                }
+            }
+        };
+        if (vcpkg_config_)
+        {
+            if (const nl::json dep_json = nl::json::parse(*vcpkg_config_);
+                dep_json.contains("registries"))
+            {
+                const auto& dep_reg = dep_json["registries"];
+                auto& reg = vcpkg_config["registries"];
+                reg.insert(reg.end(), dep_reg.begin(), dep_reg.end());
+            }
+        }
+
+        write_all_text(test_path / "vcpkg-configuration.json", vcpkg_config.dump(4));
     }
 
     std::string Updater::test_install() const
@@ -145,7 +185,13 @@ namespace uvp
         const auto [code, res] = run_command("vcpkg install");
         const auto iter = std::ranges::find_if(res,
             [](const std::string& str) { return str.find(actual_hash_sv) != std::string::npos; });
-        if (iter == res.end()) return {};
+        if (iter == res.end())
+        {
+            if (code == 0)
+                return {};
+            else
+                error("Installation test failed, and the fix cannot be done automatically");
+        }
         const std::string& str = *iter;
         const size_t offset = str.find(actual_hash_sv) + actual_hash_sv.size();
         return str.substr(offset, hash_length);
@@ -181,37 +227,22 @@ namespace uvp
         run_command("git push");
     }
 
-    void Updater::clean_up_install_test() const
-    {
-        if (const auto test_path = config_.ports_path / "temp/install-test";
-            exists(test_path))
-            remove_all(test_path);
-    }
-
     void Updater::run()
     {
         print_config();
         get_portfile();
         clone_or_pull_remote_repo();
         get_manifest();
+        get_vcpkg_config();
         update_versions();
         setup_test();
-        try
+        while (true)
         {
-            while (true)
-            {
-                const std::string hash = test_install();
-                if (hash.empty()) break;
-                update_sha512(hash);
-            }
-            push_remote();
-            info("Port {} updated successfully!", config_.name);
+            const std::string hash = test_install();
+            if (hash.empty()) break;
+            update_sha512(hash);
         }
-        catch (...)
-        {
-            clean_up_install_test();
-            throw;
-        }
-        clean_up_install_test();
+        push_remote();
+        info("Port {} updated successfully!", config_.name);
     }
 }

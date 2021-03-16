@@ -13,6 +13,7 @@ namespace uvp
         fs::path ports_path;
         std::optional<fs::path> local_repo;
         bool push = false;
+        bool fix = false;
 
         static Config from_cmd_args(int argc, const char* const argv[]);
     };
