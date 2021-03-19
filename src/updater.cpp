@@ -50,9 +50,18 @@ namespace uvp
     void Updater::get_manifest()
     {
         info("Finding manifest file (vcpkg.json)...");
-        if (const fs::path result = *config_.local_repo / "vcpkg.json";
-            exists(result))
-            manifest_ = Manifest(canonical(result));
+        if (const fs::path inter = *config_.local_repo / "vcpkg-interface.json";
+            exists(inter))
+        {
+            manifest_ = Manifest(canonical(inter));
+            fmt::print("Found vcpkg-interface.json, using this file\n");
+        }
+        else if (const fs::path normal = *config_.local_repo / "vcpkg.json";
+            exists(normal))
+        {
+            manifest_ = Manifest(canonical(normal));
+            fmt::print("Found vcpkg.json, using this file\n");
+        }
         else
             error("Cannot find manifest file (vcpkg.json)");
         fmt::print("{}: {}, port-version: {}\n",
