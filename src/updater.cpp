@@ -114,7 +114,9 @@ namespace uvp
             {
                 const std::string version = manifest_.port_version() == 0 ?
                                                 std::string(manifest_.version()) :
-                                                fmt::format("{} (port version {})", manifest_.port_version());
+                                                fmt::format("{} (port version {})",
+                                                    manifest_.version(),
+                                                    manifest_.port_version());
                 run_command(fmt::format(R"(git commit -m "Update {} to {}")", config_.name, version));
             }
         }
