@@ -162,13 +162,16 @@ namespace uvp
             { "dependencies", { config_.name } }
         }.dump(4));
 
+        current_path(config_.ports_path);
+        const auto obj = run_command("git rev-parse HEAD").output[0];
         nl::json vcpkg_config{
             {
                 "registries", {
                     {
                         { "kind", "git" },
                         { "repository", "file:///" + config_.ports_path.generic_string() },
-                        { "packages", { config_.name } }
+                        { "packages", { config_.name } },
+                        { "baseline", obj }
                     }
                 }
             }
@@ -185,6 +188,7 @@ namespace uvp
         }
 
         write_all_text(test_path / "vcpkg-configuration.json", vcpkg_config.dump(4));
+        remove_all(test_path / "vcpkg_installed");
     }
 
     std::string Updater::test_install() const
@@ -230,6 +234,24 @@ namespace uvp
         }
     }
 
+    void Updater::amend_test_config()
+    {
+        current_path(config_.ports_path);
+        const auto repo = "file:///" + config_.ports_path.generic_string();
+        const auto obj = run_command("git rev-parse HEAD").output[0];
+        const auto test_path = config_.ports_path / "temp/install-test";
+        const auto config_path = test_path / "vcpkg-configuration.json";
+        auto config = nl::json::parse(read_all_text(config_path));
+        for (auto& reg : config["registries"])
+            if (reg["repository"] == repo)
+            {
+                reg["baseline"] = obj;
+                break;
+            }
+        write_all_text(config_path, config.dump(4));
+        remove_all(test_path / "vcpkg_installed");
+    }
+
     void Updater::push_remote() const
     {
         if (!config_.push) return;
@@ -252,6 +274,7 @@ namespace uvp
             const std::string hash = test_install();
             if (hash.empty()) break;
             update_sha512(hash);
+            amend_test_config();
         }
         push_remote();
         info("Port {} updated successfully!", config_.name);

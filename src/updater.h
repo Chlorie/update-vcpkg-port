@@ -24,6 +24,7 @@ namespace uvp
         void setup_test() const;
         std::string test_install() const;
         void update_sha512(std::string_view hash);
+        void amend_test_config();
         void push_remote() const;
 
     public:
